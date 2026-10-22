@@ -1116,9 +1116,11 @@
 
   function registerSW() {
     if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-    window.addEventListener('load', () => {
+    const start = () => {
       navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-режим недоступен */ });
-    });
+    };
+    if (document.readyState === 'complete') start();
+    else window.addEventListener('load', start, { once: true });
   }
 
   async function init() {
