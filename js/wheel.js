@@ -66,6 +66,28 @@ window.Wheel = (() => {
     return t + '…';
   }
 
+  function wrapLabel(text, maxWidth, maxLines) {
+    const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return [''];
+    const lines = [];
+    let i = 0;
+    while (i < words.length && lines.length < maxLines) {
+      let line = words[i++];
+      while (i < words.length && ctx.measureText(line + ' ' + words[i]).width <= maxWidth) {
+        line += ' ' + words[i++];
+      }
+      lines.push(line);
+    }
+    if (i < words.length) {
+      let last = lines[lines.length - 1];
+      while (last.length > 1 && ctx.measureText(last + '…').width > maxWidth) {
+        last = last.slice(0, -1);
+      }
+      lines[lines.length - 1] = last + '…';
+    }
+    return lines.map((line) => fitText(line, maxWidth));
+  }
+
   function draw() {
     if (!ctx || !canvas) return;
     const w = canvas.width / dpr;
@@ -98,24 +120,29 @@ window.Wheel = (() => {
 
       if (s.angle > 0.17) {
         const mid = a0 + s.angle / 2;
+        const canWrap = s.angle > 0.3;
+        const labelSize = canWrap ? fs * 0.92 : fs;
+        const labelWidth = R * (canWrap ? 0.56 : 0.54);
         ctx.save();
         ctx.rotate(mid);
-        ctx.font = '600 ' + fs.toFixed(1) + 'px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.font = '600 ' + labelSize.toFixed(1) + 'px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
         ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
         ctx.shadowBlur = 4;
         ctx.shadowOffsetY = 1;
-        const label = fitText(String(s.label || ''), R * 0.54);
+        const lines = wrapLabel(String(s.label || ''), labelWidth, canWrap ? 2 : 1);
+        const lineHeight = labelSize * 1.12;
+        const top = -((lines.length - 1) * lineHeight) / 2;
         const screenMid = mid + rotation;
         const norm = ((screenMid % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
         if (norm > Math.PI / 2 && norm < Math.PI * 1.5) {
           ctx.rotate(Math.PI);
           ctx.textAlign = 'left';
-          ctx.fillText(label, -R * 0.9, 0);
+          lines.forEach((line, i) => ctx.fillText(line, -R * 0.9, top + i * lineHeight));
         } else {
           ctx.textAlign = 'right';
-          ctx.fillText(label, R * 0.9, 0);
+          lines.forEach((line, i) => ctx.fillText(line, R * 0.9, top + i * lineHeight));
         }
         ctx.restore();
       }
@@ -131,18 +158,23 @@ window.Wheel = (() => {
     ctx.stroke();
   }
 
-  function spin() {
+  function spin(excludeId) {
     if (spinning || !slices.length) return Promise.resolve(null);
     spinning = true;
 
-    const total = slices.reduce((sum, s) => sum + s.weight, 0);
+    let pool = slices.map((slice, index) => ({ slice, index }));
+    if (excludeId && pool.length > 1) {
+      const withoutCurrent = pool.filter((item) => item.slice.id !== excludeId);
+      if (withoutCurrent.length) pool = withoutCurrent;
+    }
+    const total = pool.reduce((sum, item) => sum + item.slice.weight, 0);
     let r = Math.random() * total;
-    let idx = 0;
+    let idx = pool[0].index;
     let acc = 0;
-    for (let i = 0; i < slices.length; i++) {
-      acc += slices[i].weight;
-      if (r <= acc) { idx = i; break; }
-      idx = i;
+    for (let i = 0; i < pool.length; i++) {
+      acc += pool[i].slice.weight;
+      if (r <= acc) { idx = pool[i].index; break; }
+      idx = pool[i].index;
     }
 
     let cum = 0;

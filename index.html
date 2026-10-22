@@ -13,9 +13,26 @@
   <meta name="apple-mobile-web-app-title" content="Вкусно?" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <script>
+    /* Тема применяется до отрисовки, чтобы не было вспышки. */
+    (function () {
+      try {
+        var t = localStorage.getItem('vkusno.theme') || 'dark';
+        if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = t;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = t === 'light' ? '#f5efe5' : '#0f0d0b';
+      } catch (e) { /* остаёмся в тёмной */ }
+    })();
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<div class="offline-bar" id="offlineBar" role="status" aria-live="polite" hidden>Нет сети — изменения сохранятся на устройстве</div>
+<div class="update-bar" id="updateBar" role="status" aria-live="polite" hidden>
+  <span>Доступна новая версия</span>
+  <button type="button" id="updateBtn">Обновить</button>
+</div>
 <div class="app">
   <header class="topbar">
     <a class="brand" href="#" data-view="wheel" aria-label="Вкусно? — на главную">
@@ -65,6 +82,17 @@
             </div>
           </div>
 
+          <div class="today-card" id="todayCard" hidden>
+            <div class="today-main">
+              <span class="eyebrow">Выбор на сегодня</span>
+              <strong id="todayName">—</strong>
+            </div>
+            <div class="today-actions">
+              <button class="btn btn-primary btn-sm" id="todayCook" type="button">Готовлю!</button>
+              <button class="btn btn-ghost btn-sm" id="todayOpen" type="button">Открыть</button>
+            </div>
+          </div>
+
           <p class="wheel-hint">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="3.4"/></svg>
             Умный выбор: любимые блюда выпадают чаще, а приготовленные недавно — реже.
@@ -92,6 +120,11 @@
             <div class="stat"><strong id="statDishes">0</strong><span>блюд в списке</span></div>
             <div class="stat"><strong id="statRating">—</strong><span>средний рейтинг</span></div>
             <div class="stat"><strong id="statCooks">0</strong><span>раз готовили</span></div>
+          </div>
+
+          <div class="panel side-links">
+            <button class="side-link" id="planBtn" type="button"><span>🍲</span><span><strong>Меню на неделю</strong><small>семь ужинов без повторов</small></span></button>
+            <button class="side-link" id="historyBtn" type="button"><span>📊</span><span><strong>История и статистика</strong><small>что и когда готовили</small></span></button>
           </div>
         </aside>
       </div>
@@ -156,7 +189,7 @@
     <div class="result-media" id="resultMedia"></div>
     <div class="result-body">
       <span class="eyebrow">Сегодня готовим</span>
-      <h2 id="resultName">—</h2>
+      <h2 id="resultName" aria-live="polite">—</h2>
       <div class="result-rating" id="resultStars"></div>
       <div class="tags" id="resultTags"></div>
       <p class="result-desc" id="resultDesc"></p>
@@ -204,6 +237,18 @@
         <span>Краткое описание</span>
         <textarea class="input" id="fDesc" maxlength="240" rows="2" placeholder="С беконом, сливками и пармезаном"></textarea>
       </label>
+      <label class="field">
+        <span>Ингредиенты <small class="field-note">по одному на строку</small></span>
+        <textarea class="input" id="fIngredients" rows="3" placeholder="Курица&#10;Сливки&#10;Пармезан"></textarea>
+      </label>
+      <label class="field">
+        <span>Ссылка на рецепт</span>
+        <input class="input" id="fUrl" type="url" inputmode="url" maxlength="500" placeholder="https://…" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Заметка</span>
+        <textarea class="input" id="fNotes" maxlength="1000" rows="3" placeholder="Что важно помнить при готовке"></textarea>
+      </label>
 
       <div class="field">
         <span>Оценка</span>
@@ -250,6 +295,7 @@
       <section>
         <h3>Данные</h3>
         <p class="muted" id="settingsStats">…</p>
+        <p class="settings-hint" id="settingsStorage"></p>
         <div class="settings-actions">
           <button class="btn btn-primary" id="shareBtn" type="button" hidden>Поделиться бэкапом</button>
           <button class="btn btn-ghost" id="saveAsBtn" type="button" hidden>Сохранить в папку…</button>
@@ -257,10 +303,43 @@
           <button class="btn btn-ghost" id="importBtn" type="button">Загрузить бэкап</button>
           <input type="file" id="importInput" accept="application/json,.json" hidden />
         </div>
+        <p class="settings-hint" id="settingsBackup"></p>
         <p class="settings-hint">
           «Поделиться» отправит файл в Почту, Telegram, AirDrop или облачную папку
           (iCloud Drive, Google Drive). Файл из письма сохраните в «Файлы», затем
           загрузите его здесь.
+        </p>
+      </section>
+      <section id="autoBackupSection">
+        <h3>Автобэкап в папку</h3>
+        <p class="muted" id="autoBackupStatus">Выберите папку — приложение будет сохранять копию раз в неделю.</p>
+        <div class="settings-actions">
+          <button class="btn btn-ghost" id="autoBackupPick" type="button">Выбрать папку…</button>
+          <button class="btn btn-ghost" id="autoBackupNow" type="button" hidden>Сохранить сейчас</button>
+          <button class="btn btn-ghost" id="autoBackupOff" type="button" hidden>Отключить</button>
+        </div>
+        <p class="settings-hint">
+          Работает в Chrome и Edge на компьютере. Папка может быть в iCloud Drive,
+          Google Drive или Яндекс.Диске — тогда копия окажется в облаке.
+        </p>
+      </section>
+      <section>
+        <h3>Оформление</h3>
+        <p class="muted">Тема интерфейса. «Авто» следует настройке системы.</p>
+        <div class="chips" id="themeChoices">
+          <button class="chip" type="button" data-theme-choice="dark">Тёмная</button>
+          <button class="chip" type="button" data-theme-choice="light">Светлая</button>
+          <button class="chip" type="button" data-theme-choice="auto">Авто</button>
+        </div>
+      </section>
+      <section id="installSection">
+        <h3>Приложение</h3>
+        <p class="muted" id="installStatus">Установите «Вкусно?» на домашний экран — так удобнее открывать и данные защищены лучше.</p>
+        <div class="settings-actions">
+          <button class="btn btn-ghost" id="installBtn" type="button" hidden>Установить</button>
+        </div>
+        <p class="settings-hint" id="iosHint" hidden>
+          На iPhone: откройте сайт в Safari → «Поделиться» → «На экран Домой».
         </p>
       </section>
       <section>
@@ -280,12 +359,53 @@
       </section>
       <section>
         <h3>Опасная зона</h3>
-        <p class="muted">Удаляет все блюда и фото с этого устройства.</p>
+        <p class="muted">Удаляет все блюда, фото, историю готовки и меню на неделю с этого устройства.</p>
         <button class="btn btn-danger" id="clearBtn" type="button">Очистить всё</button>
       </section>
       <footer class="settings-foot">
         Вкусно? · данные хранятся только на этом устройстве
       </footer>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="planModal" aria-hidden="true">
+  <div class="modal-card plan-card" role="dialog" aria-modal="true" aria-labelledby="planTitle">
+    <div class="modal-head">
+      <h2 id="planTitle">Меню на неделю</h2>
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="plan-body" id="planBody"></div>
+    <div class="plan-actions">
+      <button class="btn btn-ghost" id="planRebuild" type="button">Пересобрать</button>
+      <button class="btn btn-ghost" id="planShopping" type="button">Список покупок</button>
+      <button class="btn btn-primary" type="button" data-close>Готово</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="historyModal" aria-hidden="true">
+  <div class="modal-card history-card" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <div class="modal-head">
+      <h2 id="historyTitle">История и статистика</h2>
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="history-body" id="historyBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="shoppingModal" aria-hidden="true">
+  <div class="modal-card shopping-card" role="dialog" aria-modal="true" aria-labelledby="shoppingTitle">
+    <div class="modal-head">
+      <h2 id="shoppingTitle">Список покупок</h2>
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="shopping-body" id="shoppingBody"></div>
+    <div class="shopping-actions">
+      <button class="btn btn-ghost" id="shoppingCopy" type="button">Скопировать</button>
+      <button class="btn btn-ghost" id="shoppingShare" type="button" hidden>Поделиться</button>
+      <button class="btn btn-ghost" id="shoppingDownload" type="button">Скачать</button>
+      <button class="btn btn-primary" type="button" data-close>Готово</button>
     </div>
   </div>
 </div>

@@ -11,6 +11,22 @@
   "background_color": "#0f0d0b",
   "theme_color": "#0f0d0b",
   "categories": ["food", "lifestyle", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Крутить колесо",
+      "short_name": "Крутить",
+      "description": "Выбрать блюдо на сегодня",
+      "url": "./?action=spin",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Добавить блюдо",
+      "short_name": "Добавить",
+      "description": "Добавить новое блюдо в список",
+      "url": "./?action=add",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

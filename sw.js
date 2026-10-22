@@ -1,5 +1,5 @@
 /* Офлайн-кэш приложения. */
-const CACHE = 'vkusno-v3';
+const CACHE = 'vkusno-v4';
 const ASSETS = [
   './',
   './index.html',

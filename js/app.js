@@ -65,25 +65,140 @@
     filters: { meal: 'all', fast: false, fav: false },
     dishMeal: 'all',
     dishFav: false,
+    dishPhoto: false,
+    dishLongAgo: false,
     search: '',
     sort: 'smart',
     editingId: null,
     resultId: null,
-    spinning: false
+    spinning: false,
+    today: null,
+    history: [],
+    plan: null,
+    theme: 'dark',
+    autoBackup: null,
+    installPrompt: null,
+    lastBackupAt: null,
+    lastAutoBackupAt: null
   };
 
   let formPhoto = null;
+  let formPhotoPreviewURL = null;
+  let formPhotoPreviewRef = null;
   let formRating = 0;
   let formMeals = [];
   let formTypes = [];
   let firstRunToast = 0;
+  let swRegistration = null;
+  let updateShown = false;
+  let autoBackupTimer = null;
+  const AUTO_BACKUP_INTERVAL = 7 * 864e5;
+
+  const photoURLs = new Map();
+
+  /* ---------- Даты ---------- */
+  function localDateKey(date) {
+    const d = date ? new Date(date) : new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+
+  function parseDateKey(key) {
+    const parts = String(key || '').split('-').map(Number);
+    return new Date(parts[0], (parts[1] || 1) - 1, parts[2] || 1);
+  }
+
+  function addDays(date, days) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    return d;
+  }
+
+  function shortDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return '0 КБ';
+    if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' КБ';
+    return (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' МБ';
+  }
+
+  function daysSince(iso) {
+    if (!iso) return null;
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return null;
+    return Math.floor((Date.now() - t) / 864e5);
+  }
+
+  /* ---------- Фото ---------- */
+  function photoSrc(photo, key) {
+    if (!photo) return '';
+    if (typeof photo === 'string') return photo;
+    if (!(photo instanceof Blob)) return '';
+    const k = key || ('blob-' + photo.size + '-' + (photo.name || ''));
+    if (!photoURLs.has(k)) photoURLs.set(k, URL.createObjectURL(photo));
+    return photoURLs.get(k);
+  }
+
+  function dishPhotoSrc(dish) {
+    return photoSrc(dish.photo, dish.id + '|' + (dish.updatedAt || ''));
+  }
+
+  function dropPhotoURL(key) {
+    const url = photoURLs.get(key);
+    if (url) {
+      URL.revokeObjectURL(url);
+      photoURLs.delete(key);
+    }
+  }
+
+  function dataURLToBlob(dataURL) {
+    const comma = dataURL.indexOf(',');
+    if (comma < 0) throw new Error('BAD_DATA_URL');
+    const head = dataURL.slice(0, comma);
+    const body = dataURL.slice(comma + 1);
+    const mime = (/data:([^;]+)/.exec(head) || [])[1] || 'image/jpeg';
+    const bin = atob(body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('READ'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function normalizePhoto(photo) {
+    if (!photo || DB.mode !== 'idb' || typeof photo !== 'string') return photo;
+    if (photo.indexOf('data:image/') !== 0) return null;
+    try { return dataURLToBlob(photo); } catch (e) { return null; }
+  }
+
+  async function photoToDataURL(photo) {
+    if (!photo) return null;
+    if (typeof photo === 'string') return photo;
+    if (photo instanceof Blob) {
+      try { return await blobToDataURL(photo); } catch (e) { return null; }
+    }
+    return null;
+  }
 
   /* ---------- Данные ---------- */
   function sanitizeDish(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || '').trim().slice(0, 60);
     if (!name) return null;
-    const photo = typeof raw.photo === 'string' && raw.photo.indexOf('data:image/') === 0 ? raw.photo : null;
+    const photo = raw.photo instanceof Blob && raw.photo.type.indexOf('image/') === 0
+      ? raw.photo
+      : (typeof raw.photo === 'string' && raw.photo.indexOf('data:image/') === 0 ? raw.photo : null);
     const meals = Array.isArray(raw.meals) ? raw.meals.filter((m) => MEALS.some((x) => x.id === m)) : [];
     const types = Array.isArray(raw.types) ? raw.types.filter((t) => TYPES.some((x) => x.id === t)) : [];
     let lastCooked = null;
@@ -92,6 +207,21 @@
       if (!isNaN(t)) lastCooked = new Date(t).toISOString();
     }
     const created = raw.createdAt ? new Date(raw.createdAt).getTime() : Date.now();
+    const updated = raw.updatedAt ? new Date(raw.updatedAt).getTime() : NaN;
+    const ingredientList = Array.isArray(raw.ingredients)
+      ? raw.ingredients
+      : String(raw.ingredients || '').split('\n');
+    const ingredients = Array.from(new Set(ingredientList
+      .map((item) => String(item || '').trim().slice(0, 120))
+      .filter(Boolean))).slice(0, 40);
+    let url = String(raw.url || '').trim().slice(0, 500);
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    if (url) {
+      try {
+        const parsed = new URL(url);
+        if (!/^https?:$/.test(parsed.protocol)) url = '';
+      } catch (e) { url = ''; }
+    }
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       name,
@@ -104,9 +234,12 @@
       favorite: !!raw.favorite,
       lastCooked,
       timesCooked: clamp(Math.round(Number(raw.timesCooked) || 0), 0, 100000),
+      ingredients,
+      url,
+      notes: String(raw.notes || '').trim().slice(0, 1000),
       emoji: typeof raw.emoji === 'string' && raw.emoji.length <= 8 ? raw.emoji : '',
       createdAt: isNaN(created) ? new Date().toISOString() : new Date(created).toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: isNaN(updated) ? new Date().toISOString() : new Date(updated).toISOString()
     };
   }
 
@@ -259,6 +392,40 @@
     $('#spinBtn').disabled = !enough;
     Wheel.setSlices(enough ? buildSlices(list) : []);
     renderStats();
+    renderToday();
+  }
+
+  function todayDish() {
+    if (!state.today || state.today.date !== localDateKey()) return null;
+    return state.dishes.find((d) => d.id === state.today.id) || null;
+  }
+
+  async function setToday(dish) {
+    if (!dish) return;
+    state.today = { date: localDateKey(), id: dish.id };
+    try { await DB.setMeta('todayPick', state.today); } catch (e) { /* не критично */ }
+    renderToday();
+  }
+
+  async function clearToday() {
+    if (!state.today) return;
+    state.today = null;
+    try { await DB.setMeta('todayPick', null); } catch (e) { /* ignore */ }
+    renderToday();
+  }
+
+  function renderToday() {
+    const card = $('#todayCard');
+    if (!card) return;
+    const dish = todayDish();
+    if (!dish) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    $('#todayName').textContent = dish.name;
+    $('#todayCook').dataset.id = dish.id;
+    $('#todayOpen').dataset.id = dish.id;
   }
 
   function sortDishes(list) {
@@ -282,7 +449,7 @@
 
   function dishCardHTML(dish, index) {
     const photo = dish.photo
-      ? '<img src="' + dish.photo + '" alt="" loading="lazy" />'
+      ? '<img src="' + esc(dishPhotoSrc(dish)) + '" alt="" loading="lazy" />'
       : '<div class="ph" style="background:' + gradientFor(dish) + '">' +
         '<span class="ph-emoji">' + esc(emojiFor(dish)) + '</span></div>';
 
@@ -299,10 +466,10 @@
     const time = dish.time ? '<span class="time-badge">⏱ ' + dish.time + ' мин</span>' : '';
     const times = dish.timesCooked ? '<span>' + dish.timesCooked + '×</span>' : '';
 
-    return '<article class="dish-card" data-id="' + dish.id + '" tabindex="0" role="button" ' +
+    return '<article class="dish-card" data-id="' + esc(dish.id) + '" tabindex="0" role="button" ' +
       'aria-label="' + esc(dish.name) + '" style="animation-delay:' + Math.min(index * 22, 220) + 'ms">' +
       '<div class="thumb">' + photo +
-      '<button type="button" class="fav-btn ' + (dish.favorite ? 'is-on' : '') + '" data-fav="' + dish.id + '" ' +
+      '<button type="button" class="fav-btn ' + (dish.favorite ? 'is-on' : '') + '" data-fav="' + esc(dish.id) + '" ' +
       'aria-label="' + (dish.favorite ? 'Убрать из избранного' : 'В избранное') + '" ' +
       'aria-pressed="' + (dish.favorite ? 'true' : 'false') + '">' + HEART + '</button>' +
       time + '</div>' +
@@ -328,6 +495,10 @@
     ).join('');
     html += '<button type="button" class="chip ' + (state.dishFav ? 'is-active' : '') +
       '" data-dish-fav="1">♥ Избранное</button>';
+    html += '<button type="button" class="chip ' + (state.dishPhoto ? 'is-active' : '') +
+      '" data-dish-photo="1">📷 С фото</button>';
+    html += '<button type="button" class="chip ' + (state.dishLongAgo ? 'is-active' : '') +
+      '" data-dish-long="1">🕰 Давно не готовили</button>';
     $('#dishFilters').innerHTML = html;
   }
 
@@ -345,8 +516,13 @@
     let list = state.dishes.filter((d) => {
       if (state.dishMeal !== 'all' && !d.meals.includes(state.dishMeal)) return false;
       if (state.dishFav && !d.favorite) return false;
+      if (state.dishPhoto && !d.photo) return false;
+      if (state.dishLongAgo) {
+        const days = d.lastCooked ? daysSince(d.lastCooked) : null;
+        if (days !== null && days < 30) return false;
+      }
       if (!q) return true;
-      const haystack = [d.name, d.desc].concat(
+      const haystack = [d.name, d.desc, d.notes, d.ingredients.join(' ')].concat(
         d.meals.map((m) => { const x = mealById(m); return x ? x.label : ''; }),
         d.types.map((t) => { const x = typeById(t); return x ? x.label : ''; })
       ).join(' ').toLowerCase();
@@ -380,6 +556,8 @@
   function openModal(modal) {
     if (!modal) return;
     modal._prevFocus = document.activeElement;
+    const card = modal.querySelector('.modal-card');
+    if (card) card.scrollTop = 0;
     modal.classList.add('open');
     modal.setAttribute('aria-hidden', 'false');
     document.body.classList.add('modal-open');
@@ -406,7 +584,7 @@
   }
 
   /* ---------- Колесо: запуск и результат ---------- */
-  async function spinWheel() {
+  async function spinWheel(excludeId) {
     if (state.spinning) return;
     if (wheelDishes().length < 2) {
       toast('Для колеса нужно минимум два блюда');
@@ -416,9 +594,12 @@
     const hub = $('#spinBtn');
     hub.classList.add('is-spinning');
     try {
-      const result = await Wheel.spin();
+      const result = await Wheel.spin(excludeId);
       const dish = result ? state.dishes.find((d) => d.id === result.id) : null;
-      if (dish) openResult(dish);
+      if (dish) {
+        await setToday(dish);
+        openResult(dish);
+      }
     } finally {
       state.spinning = false;
       hub.classList.remove('is-spinning');
@@ -444,7 +625,7 @@
     const media = $('#resultMedia');
     media.classList.toggle('no-photo', !dish.photo);
     if (dish.photo) {
-      media.innerHTML = '<img src="' + dish.photo + '" alt="' + esc(dish.name) + '" />';
+      media.innerHTML = '<img src="' + esc(dishPhotoSrc(dish)) + '" alt="' + esc(dish.name) + '" />';
     } else {
       media.innerHTML = '<div class="ph" style="background:' + gradientFor(dish) +
         '"><span class="ph-emoji">' + esc(emojiFor(dish)) + '</span></div>';
@@ -459,17 +640,60 @@
   async function markCooked(id) {
     const dish = state.dishes.find((d) => d.id === id);
     if (!dish) return;
-    dish.lastCooked = new Date().toISOString();
-    dish.timesCooked = (dish.timesCooked || 0) + 1;
-    dish.updatedAt = new Date().toISOString();
+    const at = new Date().toISOString();
+    const previous = {
+      lastCooked: dish.lastCooked,
+      timesCooked: dish.timesCooked || 0,
+      updatedAt: dish.updatedAt
+    };
+    const next = Object.assign({}, dish, {
+      lastCooked: at,
+      timesCooked: (dish.timesCooked || 0) + 1,
+      updatedAt: at
+    });
     try {
-      await DB.put(dish);
-      toast('Приятного аппетита! 🍽');
-      burstConfetti();
+      await DB.put(next);
+      dropPhotoURL(id + '|' + (previous.updatedAt || ''));
+      Object.assign(dish, next);
     } catch (e) {
       toast('Не удалось сохранить — проверьте место');
+      return;
     }
+
+    const entry = { id, at };
+    const wasToday = !!(state.today && state.today.id === id && state.today.date === localDateKey());
+    if (wasToday) await clearToday();
+    state.history.push(entry);
+    if (state.history.length > 1000) state.history = state.history.slice(-1000);
+    try { await DB.setMeta('cookLog', state.history); } catch (e) { /* история не критична */ }
     renderAll();
+    burstConfetti();
+    toast('Приятного аппетита! 🍽', {
+      action: 'Отменить',
+      onAction: () => undoCook(id, previous, entry, wasToday)
+    });
+    scheduleAutoBackup();
+  }
+
+  async function undoCook(id, previous, entry, wasToday) {
+    const dish = state.dishes.find((d) => d.id === id);
+    if (!dish) return;
+    const currentUpdated = dish.updatedAt;
+    Object.assign(dish, previous);
+    try {
+      await DB.put(dish);
+    } catch (e) {
+      toast('Не удалось отменить');
+      return;
+    }
+    dropPhotoURL(id + '|' + (currentUpdated || ''));
+    const at = state.history.lastIndexOf(entry);
+    if (at >= 0) state.history.splice(at, 1);
+    try { await DB.setMeta('cookLog', state.history); } catch (e) { /* ignore */ }
+    if (wasToday) await setToday(dish);
+    renderAll();
+    toast('Отменено');
+    scheduleAutoBackup();
   }
 
   /* ---------- Карточка блюда ---------- */
@@ -477,14 +701,25 @@
     const dish = state.dishes.find((d) => d.id === id);
     if (!dish) return;
     const media = dish.photo
-      ? '<div class="detail-media"><img src="' + dish.photo + '" alt="' + esc(dish.name) + '" /></div>'
+      ? '<div class="detail-media"><img src="' + esc(dishPhotoSrc(dish)) + '" alt="' + esc(dish.name) + '" /></div>'
       : '<div class="detail-media no-photo"><div class="ph" style="background:' + gradientFor(dish) + '">' +
         '<span class="ph-emoji">' + esc(emojiFor(dish)) + '</span></div></div>';
+
+    const ingredients = dish.ingredients && dish.ingredients.length
+      ? '<div class="detail-section"><h4>Ингредиенты</h4><ul class="ingredients">' +
+        dish.ingredients.map((item) => '<li>' + esc(item) + '</li>').join('') + '</ul></div>'
+      : '';
+    const recipe = dish.url
+      ? '<a class="btn btn-ghost detail-link" href="' + esc(dish.url) + '" target="_blank" rel="noopener noreferrer">Открыть рецепт ↗</a>'
+      : '';
+    const notes = dish.notes
+      ? '<div class="detail-section"><h4>Заметка</h4><p>' + esc(dish.notes) + '</p></div>'
+      : '';
 
     $('#dishDetail').innerHTML = media +
       '<div class="detail-body">' +
       '<div class="detail-top"><h2 id="detailName">' + esc(dish.name) + '</h2>' +
-      '<button type="button" class="fav-btn ' + (dish.favorite ? 'is-on' : '') + '" data-fav="' + dish.id + '" ' +
+      '<button type="button" class="fav-btn ' + (dish.favorite ? 'is-on' : '') + '" data-fav="' + esc(dish.id) + '" ' +
       'aria-label="' + (dish.favorite ? 'Убрать из избранного' : 'В избранное') + '">' + HEART + '</button></div>' +
       starsHTML(dish.rating, 17) +
       '<div class="tags" style="margin-top:12px">' + tagsHTML(dish) + '</div>' +
@@ -494,10 +729,11 @@
       '<div><span>Последний раз</span><strong>' + (dish.lastCooked ? relDays(dish.lastCooked) : '—') + '</strong></div>' +
       '<div><span>Время</span><strong>' + (dish.time ? dish.time + ' мин' : '—') + '</strong></div>' +
       '</div>' +
+      ingredients + notes + recipe +
       '<div class="detail-actions">' +
-      '<button type="button" class="btn btn-primary" data-cook="' + dish.id + '">Готовлю!</button>' +
-      '<button type="button" class="btn btn-ghost" data-edit="' + dish.id + '">Изменить</button>' +
-      '<button type="button" class="btn btn-danger" data-delete="' + dish.id + '">Удалить</button>' +
+      '<button type="button" class="btn btn-primary" data-cook="' + esc(dish.id) + '">Готовлю!</button>' +
+      '<button type="button" class="btn btn-ghost" data-edit="' + esc(dish.id) + '">Изменить</button>' +
+      '<button type="button" class="btn btn-danger" data-delete="' + esc(dish.id) + '">Удалить</button>' +
       '</div></div>';
 
     openModal($('#dishModal'));
@@ -506,11 +742,22 @@
   async function toggleFavorite(id) {
     const dish = state.dishes.find((d) => d.id === id);
     if (!dish) return;
-    dish.favorite = !dish.favorite;
-    dish.updatedAt = new Date().toISOString();
-    try { await DB.put(dish); } catch (e) { /* ignore */ }
+    const oldUpdated = dish.updatedAt;
+    const next = Object.assign({}, dish, {
+      favorite: !dish.favorite,
+      updatedAt: new Date().toISOString()
+    });
+    try {
+      await DB.put(next);
+    } catch (e) {
+      toast('Не удалось сохранить — проверьте место');
+      return;
+    }
+    Object.assign(dish, next);
+    dropPhotoURL(id + '|' + (oldUpdated || ''));
     renderAll();
     if ($('#dishModal').classList.contains('open')) openDish(id);
+    scheduleAutoBackup();
   }
 
   /* ---------- Форма ---------- */
@@ -568,10 +815,23 @@
     const placeholder = $('#photoPlaceholder');
     const actions = $('#photoActions');
     if (formPhoto) {
-      img.src = formPhoto;
-      img.hidden = false;
-      placeholder.hidden = true;
-      actions.hidden = false;
+      let src;
+      if (typeof formPhoto === 'string') {
+        src = formPhoto;
+      } else if (formPhoto instanceof Blob) {
+        if (formPhotoPreviewRef !== formPhoto) {
+          if (formPhotoPreviewURL) URL.revokeObjectURL(formPhotoPreviewURL);
+          formPhotoPreviewRef = formPhoto;
+          formPhotoPreviewURL = URL.createObjectURL(formPhoto);
+        }
+        src = formPhotoPreviewURL;
+      }
+      if (src) {
+        img.src = src;
+        img.hidden = false;
+        placeholder.hidden = true;
+        actions.hidden = false;
+      }
     } else {
       img.hidden = true;
       img.removeAttribute('src');
@@ -580,9 +840,16 @@
     }
   }
 
+  function resetFormPhotoPreview() {
+    if (formPhotoPreviewURL) URL.revokeObjectURL(formPhotoPreviewURL);
+    formPhotoPreviewURL = null;
+    formPhotoPreviewRef = null;
+  }
+
   function openForm(id) {
     const dish = id ? state.dishes.find((d) => d.id === id) : null;
     state.editingId = dish ? dish.id : null;
+    resetFormPhotoPreview();
     formPhoto = dish ? dish.photo : null;
     formRating = dish ? dish.rating : 0;
     formMeals = dish ? dish.meals.slice() : ['dinner'];
@@ -591,6 +858,9 @@
     $('#formTitle').textContent = dish ? 'Изменить блюдо' : 'Новое блюдо';
     $('#fName').value = dish ? dish.name : '';
     $('#fDesc').value = dish ? dish.desc : '';
+    $('#fIngredients').value = dish && dish.ingredients ? dish.ingredients.join('\n') : '';
+    $('#fUrl').value = dish ? (dish.url || '') : '';
+    $('#fNotes').value = dish ? (dish.notes || '') : '';
     $('#fTime').value = dish && dish.time ? dish.time : 30;
     $('#fFav').checked = dish ? !!dish.favorite : false;
     $('#fDelete').hidden = !dish;
@@ -660,6 +930,9 @@
       types: formTypes,
       time: $('#fTime').value,
       favorite: $('#fFav').checked,
+      ingredients: $('#fIngredients').value,
+      url: $('#fUrl').value,
+      notes: $('#fNotes').value,
       lastCooked: existing ? existing.lastCooked : null,
       timesCooked: existing ? existing.timesCooked : 0,
       emoji: existing ? existing.emoji : '',
@@ -667,6 +940,7 @@
       updatedAt: now
     });
     if (!clean) return;
+    clean.photo = await normalizePhoto(clean.photo);
 
     try {
       await DB.put(clean);
@@ -682,10 +956,12 @@
       state.dishes.push(clean);
     }
 
+    if (existing) dropPhotoURL(existing.id + '|' + (existing.updatedAt || ''));
     closeModal($('#formModal'));
     renderAll();
     toast(existing ? 'Блюдо обновлено' : '«' + clean.name + '» добавлено');
     if (!existing) switchView('dishes');
+    scheduleAutoBackup();
   }
 
   async function deleteDish(id) {
@@ -703,10 +979,17 @@
       toast('Не удалось удалить');
       return;
     }
+    dropPhotoURL(id + '|' + (dish.updatedAt || ''));
     state.dishes = state.dishes.filter((d) => d.id !== id);
+    if (state.today && state.today.id === id) await clearToday();
+    if (state.plan) {
+      state.plan.days.forEach((day) => { if (day.dishId === id) day.dishId = null; });
+      try { await DB.setMeta('weekPlan', state.plan); } catch (e) { /* ignore */ }
+    }
     closeAllModals();
     renderAll();
     toast('Блюдо удалено');
+    scheduleAutoBackup();
   }
 
   /* ---------- Настройки и данные ---------- */
@@ -719,26 +1002,81 @@
   }
 
   function openSettings() {
+    refreshSettings();
+    openModal($('#settingsModal'));
+    refreshStorageInfo();
+    requestPersistence().then(refreshStorageInfo).catch(() => {});
+  }
+
+  function refreshSettings() {
     const total = state.dishes.length;
     const photos = state.dishes.filter((d) => d.photo).length;
     $('#settingsStats').textContent = total
       ? total + ' ' + plural(total, ['блюдо', 'блюда', 'блюд']) + ' · ' + photos + ' с фото · ' +
         (DB.mode === 'idb' ? 'IndexedDB' : 'локальное хранилище')
       : 'Список пока пуст — добавьте блюда или загрузите примеры';
-    openModal($('#settingsModal'));
+    renderBackupStatus();
+    renderAutoBackupSettings();
+    renderThemeChoices();
+    renderInstallState();
+  }
+
+  async function refreshStorageInfo() {
+    const el = $('#settingsStorage');
+    if (!el) return;
+    const parts = [];
+    try {
+      if (navigator.storage && navigator.storage.persisted) {
+        const persisted = await navigator.storage.persisted();
+        parts.push(persisted ? 'хранилище защищено от очистки' : 'браузер может очистить данные при нехватке места');
+      }
+      if (navigator.storage && navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        if (estimate && estimate.usage != null) parts.push('занято ' + formatBytes(estimate.usage));
+      }
+    } catch (e) { /* информация не критична */ }
+    el.textContent = parts.join(' · ');
+  }
+
+  function renderBackupStatus() {
+    const el = $('#settingsBackup');
+    if (!el) return;
+    const days = daysSince(state.lastBackupAt);
+    if (days === null) {
+      el.textContent = 'Резервная копия ещё не создавалась. Сохраните её, чтобы не потерять блюда.';
+    } else if (days <= 0) {
+      el.textContent = 'Последняя резервная копия — сегодня.';
+    } else {
+      el.textContent = 'Последняя резервная копия — ' + days + ' ' + plural(days, ['день', 'дня', 'дней']) + ' назад.' +
+        (days > 30 ? ' Пора сохранить новую.' : '');
+    }
+  }
+
+  async function markBackupDone() {
+    state.lastBackupAt = new Date().toISOString();
+    try { await DB.setMeta('lastBackupAt', state.lastBackupAt); } catch (e) { /* ignore */ }
+    renderBackupStatus();
   }
 
   function backupName() {
     return 'vkusno-backup-' + new Date().toISOString().slice(0, 10) + '.json';
   }
 
-  function backupBlob() {
-    const payload = {
+  async function backupPayload() {
+    const dishes = [];
+    for (const dish of state.dishes) {
+      dishes.push(Object.assign({}, dish, { photo: await photoToDataURL(dish.photo) }));
+    }
+    return {
       app: 'vkusno',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
-      dishes: state.dishes
+      dishes
     };
+  }
+
+  async function backupBlob() {
+    const payload = await backupPayload();
     return new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   }
 
@@ -753,9 +1091,11 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
-  function exportBackup() {
+  async function exportBackup() {
     try {
-      downloadBlob(backupBlob(), backupName());
+      const blob = await backupBlob();
+      downloadBlob(blob, backupName());
+      await markBackupDone();
       toast('Бэкап сохранён в Загрузки');
     } catch (e) {
       toast('Не удалось создать файл');
@@ -763,18 +1103,25 @@
   }
 
   async function shareBackup() {
-    const blob = backupBlob();
-    const file = new File([blob], backupName(), { type: 'application/json' });
     try {
+      const blob = await backupBlob();
+      const file = new File([blob], backupName(), { type: 'application/json' });
       await navigator.share({
         files: [file],
         title: 'Вкусно? — бэкап',
         text: 'Список блюд и фото из приложения «Вкусно?»'
       });
+      await markBackupDone();
     } catch (e) {
       if (e && e.name === 'AbortError') return;
-      downloadBlob(blob, backupName());
-      toast('Меню недоступно — файл скачан');
+      try {
+        const blob = await backupBlob();
+        downloadBlob(blob, backupName());
+        await markBackupDone();
+        toast('Меню недоступно — файл скачан');
+      } catch (err) {
+        toast('Не удалось создать файл');
+      }
     }
   }
 
@@ -784,14 +1131,120 @@
         suggestedName: backupName(),
         types: [{ description: 'Резервная копия', accept: { 'application/json': ['.json'] } }]
       });
+      const blob = await backupBlob();
       const writable = await handle.createWritable();
-      await writable.write(backupBlob());
+      await writable.write(blob);
       await writable.close();
+      await markBackupDone();
       toast('Бэкап сохранён в выбранную папку');
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       toast('Не удалось сохранить файл');
     }
+  }
+
+  /* ---------- Автобэкап в папку ---------- */
+  async function renderAutoBackupSettings() {
+    const section = $('#autoBackupSection');
+    if (!section) return;
+    if (typeof window.showDirectoryPicker !== 'function' || DB.mode !== 'idb') {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    const status = $('#autoBackupStatus');
+    const pick = $('#autoBackupPick');
+    const now = $('#autoBackupNow');
+    const off = $('#autoBackupOff');
+    const handle = state.autoBackup && state.autoBackup.handle;
+    if (!handle) {
+      status.textContent = 'Выберите папку — приложение будет сохранять копию раз в неделю.';
+      pick.hidden = false;
+      now.hidden = true;
+      off.hidden = true;
+      return;
+    }
+    let permission = 'prompt';
+    try {
+      if (handle.queryPermission) permission = await handle.queryPermission({ mode: 'readwrite' });
+    } catch (e) { /* ignore */ }
+    const autoDays = daysSince(state.lastAutoBackupAt ? new Date(state.lastAutoBackupAt).toISOString() : null);
+    status.textContent = 'Папка «' + handle.name + '» · ' +
+      (permission === 'granted' ? 'доступ разрешён' : 'нужно снова разрешить доступ') +
+      (autoDays === null ? ' · автобэкапов ещё не было' : ' · последний ' + (autoDays ? autoDays + ' дн. назад' : 'сегодня'));
+    pick.hidden = permission === 'granted';
+    now.hidden = permission === 'denied';
+    off.hidden = false;
+  }
+
+  async function chooseAutoBackupFolder() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      toast('Браузер не поддерживает автобэкап');
+      return;
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'vkusno-backup' });
+      state.autoBackup = { handle };
+      await DB.setMeta('backupDir', handle);
+      state.lastAutoBackupAt = null;
+      await DB.setMeta('lastAutoBackupAt', null);
+      await writeAutoBackup(true);
+      refreshSettings();
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      toast('Не удалось выбрать папку');
+    }
+  }
+
+  async function writeAutoBackup(force) {
+    const handle = state.autoBackup && state.autoBackup.handle;
+    if (!handle) return false;
+    if (!force && state.lastAutoBackupAt && Date.now() - state.lastAutoBackupAt < AUTO_BACKUP_INTERVAL) {
+      return false;
+    }
+    try {
+      let permission = 'prompt';
+      if (handle.queryPermission) permission = await handle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted' && force && handle.requestPermission) {
+        permission = await handle.requestPermission({ mode: 'readwrite' });
+      }
+      if (permission !== 'granted') {
+        if (force) toast('Нужно разрешение на запись в папку');
+        return false;
+      }
+      const blob = await backupBlob();
+      const file = await handle.getFileHandle('vkusno-backup.json', { create: true });
+      const writable = await file.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      state.lastAutoBackupAt = Date.now();
+      await DB.setMeta('lastAutoBackupAt', state.lastAutoBackupAt);
+      await markBackupDone();
+      renderAutoBackupSettings();
+      if (force) toast('Копия сохранена в папку «' + handle.name + '»');
+      return true;
+    } catch (e) {
+      if (force) toast('Не удалось сохранить в папку');
+      return false;
+    }
+  }
+
+  function scheduleAutoBackup() {
+    const handle = state.autoBackup && state.autoBackup.handle;
+    if (!handle || !state.lastAutoBackupAt || Date.now() - state.lastAutoBackupAt < AUTO_BACKUP_INTERVAL) return;
+    clearTimeout(autoBackupTimer);
+    autoBackupTimer = setTimeout(() => writeAutoBackup(false), 5000);
+  }
+
+  async function disableAutoBackup() {
+    state.autoBackup = null;
+    state.lastAutoBackupAt = null;
+    try {
+      await DB.setMeta('backupDir', null);
+      await DB.setMeta('lastAutoBackupAt', null);
+    } catch (e) { /* ignore */ }
+    refreshSettings();
+    toast('Автобэкап отключён');
   }
 
   function csvCell(value) {
@@ -911,17 +1364,34 @@
       toast('В файле нет списка блюд');
       return;
     }
+    const exportedAt = !Array.isArray(data) && data && data.exportedAt ? data.exportedAt : null;
     let added = 0;
     let updated = 0;
+    let skipped = 0;
     let failed = false;
-    for (const raw of incoming) {
+    for (const source of incoming) {
+      let raw = source;
+      if (raw && typeof raw === 'object' && !raw.updatedAt && exportedAt) {
+        raw = Object.assign({}, raw, { updatedAt: exportedAt });
+      }
       const dish = sanitizeDish(raw);
       if (!dish) continue;
+      dish.photo = await normalizePhoto(dish.photo);
       const existing = state.dishes.find((d) => d.id === dish.id) ||
         state.dishes.find((d) => d.name.trim().toLowerCase() === dish.name.trim().toLowerCase());
       try {
         if (existing) {
-          const merged = Object.assign({}, dish, { id: existing.id });
+          const existingTime = new Date(existing.updatedAt || 0).getTime() || 0;
+          const incomingTime = new Date(dish.updatedAt || 0).getTime() || 0;
+          if (incomingTime <= existingTime) {
+            skipped += 1;
+            continue;
+          }
+          dropPhotoURL(existing.id + '|' + (existing.updatedAt || ''));
+          const merged = Object.assign({}, dish, {
+            id: existing.id,
+            createdAt: existing.createdAt
+          });
           await DB.put(merged);
           Object.assign(existing, merged);
           updated += 1;
@@ -937,14 +1407,17 @@
     }
     renderAll();
     if (failed) toast('Импорт прерван: не хватило места');
+    else if (!added && !updated && skipped) toast('Все блюда в файле старше текущих — пропущено ' + skipped);
     else if (!added && !updated) toast('Новых блюд не найдено');
-    else toast('Импорт: добавлено ' + added + ', обновлено ' + updated);
+    else toast('Импорт: добавлено ' + added + ', обновлено ' + updated +
+      (skipped ? ', пропущено ' + skipped : ''));
+    if (added || updated) scheduleAutoBackup();
   }
 
   async function clearAll() {
     const ok = await askConfirm(
       'Очистить весь список?',
-      'Все блюда и фото будут удалены с этого устройства. На всякий случай скачайте бэкап.',
+      'Все блюда, фото, история готовки и меню на неделю будут удалены с этого устройства. На всякий случай скачайте бэкап.',
       'Очистить всё'
     );
     if (!ok) return;
@@ -955,22 +1428,50 @@
       return;
     }
     state.dishes = [];
+    state.history = [];
+    state.today = null;
+    state.plan = null;
+    photoURLs.forEach((url) => URL.revokeObjectURL(url));
+    photoURLs.clear();
+    try {
+      await DB.setMeta('cookLog', []);
+      await DB.setMeta('todayPick', null);
+      await DB.setMeta('weekPlan', null);
+    } catch (e) { /* ignore */ }
     closeAllModals();
     renderAll();
     toast('Список очищен');
   }
 
   /* ---------- Уведомления и конфетти ---------- */
-  function toast(message) {
+  function toast(message, options) {
     const box = $('#toasts');
+    const opts = options || {};
     const el = document.createElement('div');
     el.className = 'toast';
-    el.textContent = message;
-    box.appendChild(el);
-    setTimeout(() => {
+    const text = document.createElement('span');
+    text.textContent = message;
+    el.appendChild(text);
+    let timer = null;
+    const dismiss = () => {
+      if (timer) clearTimeout(timer);
       el.classList.add('out');
       setTimeout(() => el.remove(), 260);
-    }, 2600);
+    };
+    if (opts.action) {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'toast-action';
+      action.textContent = opts.action;
+      action.addEventListener('click', () => {
+        dismiss();
+        if (typeof opts.onAction === 'function') opts.onAction();
+      });
+      el.appendChild(action);
+    }
+    box.appendChild(el);
+    timer = setTimeout(dismiss, opts.duration || (opts.action ? 5200 : 2600));
+    return dismiss;
   }
 
   function burstConfetti() {
@@ -1031,13 +1532,544 @@
     requestAnimationFrame(frame);
   }
 
+  /* ---------- Тема ---------- */
+  function applyTheme(theme, save) {
+    const next = ['dark', 'light', 'auto'].indexOf(theme) >= 0 ? theme : 'dark';
+    state.theme = next;
+    const effective = next === 'auto'
+      ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : next;
+    document.documentElement.dataset.theme = effective;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = effective === 'light' ? '#f5efe5' : '#0f0d0b';
+    try { localStorage.setItem('vkusno.theme', next); } catch (e) { /* ignore */ }
+    renderThemeChoices();
+    if (save) DB.setMeta('theme', next).catch(() => {});
+  }
+
+  function renderThemeChoices() {
+    $$('[data-theme-choice]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.themeChoice === state.theme);
+    });
+  }
+
+  function watchSystemTheme() {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const listener = () => { if (state.theme === 'auto') applyTheme('auto', false); };
+    if (media.addEventListener) media.addEventListener('change', listener);
+    else if (media.addListener) media.addListener(listener);
+  }
+
+  /* ---------- Установка ---------- */
+  function isStandalone() {
+    return !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+      !!navigator.standalone;
+  }
+
+  function isIOS() {
+    return (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  function renderInstallState() {
+    const status = $('#installStatus');
+    const btn = $('#installBtn');
+    const hint = $('#iosHint');
+    if (!status || !btn || !hint) return;
+    if (isStandalone()) {
+      status.textContent = 'Приложение открыто с домашнего экрана. Данные хранятся на устройстве.';
+      btn.hidden = true;
+      hint.hidden = true;
+      return;
+    }
+    if (state.installPrompt) {
+      status.textContent = 'Установите «Вкусно?» на домашний экран — быстрый доступ и защита данных.';
+      btn.hidden = false;
+      hint.hidden = true;
+      return;
+    }
+    btn.hidden = true;
+    if (isIOS()) {
+      status.textContent = 'Установите приложение через Safari — оно будет открываться с иконки.';
+      hint.hidden = false;
+    } else {
+      status.textContent = 'Установка доступна из меню браузера: «Установить приложение» или «Добавить на главный экран».';
+      hint.hidden = true;
+    }
+  }
+
+  async function installApp() {
+    if (!state.installPrompt) return;
+    const prompt = state.installPrompt;
+    state.installPrompt = null;
+    try {
+      prompt.prompt();
+      await prompt.userChoice;
+    } catch (e) { /* пользователь отменил */ }
+    renderInstallState();
+  }
+
+  /* ---------- Офлайн и обновления ---------- */
+  function renderOnlineState() {
+    const bar = $('#offlineBar');
+    if (bar) bar.hidden = navigator.onLine;
+  }
+
+  function showUpdateBar() {
+    if (updateShown) return;
+    updateShown = true;
+    const bar = $('#updateBar');
+    if (bar) bar.hidden = false;
+  }
+
+  async function setupServiceWorker() {
+    if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+    const hadController = !!navigator.serviceWorker.controller;
+    try {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      swRegistration = reg;
+      reg.addEventListener('updatefound', () => {
+        const worker = reg.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed' && hadController && navigator.serviceWorker.controller) showUpdateBar();
+        });
+      });
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (hadController && navigator.serviceWorker.controller) showUpdateBar();
+      });
+      setInterval(() => { reg.update().catch(() => {}); }, 60 * 60 * 1000);
+    } catch (e) { /* офлайн-режим недоступен */ }
+  }
+
+  /* ---------- История ---------- */
+  async function loadHistory() {
+    try {
+      const log = await DB.getMeta('cookLog');
+      state.history = Array.isArray(log)
+        ? log.filter((entry) => entry && typeof entry.id === 'string' && entry.at)
+          .filter((entry) => !isNaN(new Date(entry.at).getTime()))
+          .map((entry) => ({ id: entry.id, at: new Date(entry.at).toISOString() }))
+        : [];
+    } catch (e) {
+      state.history = [];
+    }
+  }
+
+  function dishName(id) {
+    const dish = state.dishes.find((d) => d.id === id);
+    return dish ? dish.name : 'Удалённое блюдо';
+  }
+
+  function openHistory() {
+    renderHistory();
+    openModal($('#historyModal'));
+  }
+
+  function renderHistory() {
+    const body = $('#historyBody');
+    if (!body) return;
+    const entries = state.history.slice().sort((a, b) => new Date(b.at) - new Date(a.at));
+    if (!entries.length) {
+      body.innerHTML = '<div class="history-empty">Пока нет записей.<br>Нажмите «Готовлю!» — и здесь появится история.</div>';
+      return;
+    }
+    const month = entries.filter((entry) => Date.now() - new Date(entry.at).getTime() < 30 * 864e5);
+    const unique = new Set(month.map((entry) => entry.id));
+    const counts = new Map();
+    entries.forEach((entry) => counts.set(entry.id, (counts.get(entry.id) || 0) + 1));
+    const top = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([id, count]) => '<li><b>' + esc(dishName(id)) + '</b><span>' + count + '×</span></li>')
+      .join('');
+    const list = entries.slice(0, 20).map((entry) => {
+      const date = new Date(entry.at);
+      const label = date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+      const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      return '<li><span class="history-name">' + esc(dishName(entry.id)) + '</span><span>' + label + ', ' + time + '</span></li>';
+    }).join('');
+    body.innerHTML =
+      '<div class="history-stats">' +
+      '<div class="history-stat"><strong>' + entries.length + '</strong><span>всего готовили</span></div>' +
+      '<div class="history-stat"><strong>' + month.length + '</strong><span>за 30 дней</span></div>' +
+      '<div class="history-stat"><strong>' + unique.size + '</strong><span>блюд за месяц</span></div>' +
+      '</div>' +
+      '<div class="history-sub">Чаще всего</div>' +
+      '<ul class="history-list history-top">' + top + '</ul>' +
+      '<div class="history-sub">Последние приготовления</div>' +
+      '<ul class="history-list">' + list + '</ul>';
+  }
+
+  /* ---------- Меню на неделю ---------- */
+  function weightedPick(list, excludeId) {
+    let pool = list.slice();
+    if (excludeId && pool.length > 1) {
+      const filtered = pool.filter((dish) => dish.id !== excludeId);
+      if (filtered.length) pool = filtered;
+    }
+    if (!pool.length) return null;
+    const total = pool.reduce((sum, dish) => sum + weightOf(dish), 0);
+    let point = Math.random() * total;
+    for (const dish of pool) {
+      point -= weightOf(dish);
+      if (point <= 0) return dish;
+    }
+    return pool[pool.length - 1];
+  }
+
+  function buildPlan() {
+    if (!state.dishes.length) return null;
+    const dinner = state.dishes.filter((dish) => dish.meals.includes('dinner'));
+    const pool = dinner.length ? dinner : state.dishes.slice();
+    const days = [];
+    let used = [];
+    for (let i = 0; i < 7; i++) {
+      let available = pool.filter((dish) => used.indexOf(dish.id) < 0);
+      if (!available.length) {
+        available = pool.slice();
+        used = [];
+      }
+      const previous = days.length ? days[days.length - 1].dishId : null;
+      const dish = weightedPick(available, previous);
+      if (!dish) break;
+      used.push(dish.id);
+      days.push({ date: localDateKey(addDays(new Date(), i)), dishId: dish.id, cooked: false });
+    }
+    return { start: localDateKey(new Date()), days };
+  }
+
+  async function savePlan() {
+    try { await DB.setMeta('weekPlan', state.plan); } catch (e) { /* ignore */ }
+  }
+
+  async function openPlan() {
+    if (!state.dishes.length) {
+      toast('Сначала добавьте блюда');
+      return;
+    }
+    let expired = false;
+    if (state.plan && state.plan.start) {
+      const start = parseDateKey(state.plan.start);
+      const today = parseDateKey(localDateKey());
+      const age = Math.round((today - start) / 864e5);
+      expired = isNaN(age) || age < 0 || age > 6;
+    }
+    if (!state.plan || !Array.isArray(state.plan.days) || state.plan.days.length !== 7 || expired) {
+      state.plan = buildPlan();
+      await savePlan();
+    }
+    renderPlan();
+    openModal($('#planModal'));
+  }
+
+  function planDayLabel(key) {
+    const today = localDateKey();
+    const tomorrow = localDateKey(addDays(new Date(), 1));
+    if (key === today) return { day: 'Сегодня', date: shortDate(parseDateKey(key)) };
+    if (key === tomorrow) return { day: 'Завтра', date: shortDate(parseDateKey(key)) };
+    const date = parseDateKey(key);
+    return {
+      day: date.toLocaleDateString('ru-RU', { weekday: 'short' }),
+      date: shortDate(date)
+    };
+  }
+
+  function planDishFor(day) {
+    return state.dishes.find((dish) => dish.id === day.dishId) || null;
+  }
+
+  function renderPlan() {
+    const body = $('#planBody');
+    if (!body) return;
+    if (!state.plan || !state.plan.days || !state.plan.days.length) {
+      body.innerHTML = '<div class="plan-empty"><div class="empty-art small">🍲</div>' +
+        '<p>Соберите меню — приложение подберёт семь блюд с учётом рейтинга и давности.</p></div>';
+      return;
+    }
+    const intro = '<p class="plan-intro">Семь дней с ' + shortDate(parseDateKey(state.plan.start)) +
+      ' — нажмите ↻, чтобы заменить блюдо, и ✓ — когда приготовили.</p>';
+    const rows = state.plan.days.map((day, index) => {
+      const dish = planDishFor(day);
+      const label = planDayLabel(day.date);
+      const meta = dish
+        ? [dish.time ? dish.time + ' мин' : '', dish.types.length ? (typeById(dish.types[0]) || {}).label || '' : '']
+          .filter(Boolean).join(' · ')
+        : 'Свободный день';
+      return '<div class="plan-row ' + (day.cooked ? 'is-cooked' : '') + '">' +
+        '<div class="plan-day"><strong>' + esc(label.day) + '</strong><span>' + esc(label.date) + '</span></div>' +
+        '<div class="plan-dish">' +
+        (dish
+          ? '<button type="button" data-plan-open="' + index + '">' + esc(dish.name) + '</button>'
+          : '<button type="button" data-plan-swap="' + index + '">Выбрать блюдо</button>') +
+        '<small>' + esc(meta) + '</small></div>' +
+        '<div class="plan-row-actions">' +
+        '<button type="button" class="plan-mini" data-plan-swap="' + index + '" aria-label="Заменить блюдо" title="Заменить">↻</button>' +
+        (dish ? '<button type="button" class="plan-mini ' + (day.cooked ? 'done' : '') + '" data-plan-cook="' + index + '" aria-label="Отметить приготовленным" title="Готово">✓</button>' : '') +
+        '</div></div>';
+    }).join('');
+    body.innerHTML = intro + rows;
+  }
+
+  async function rebuildPlan() {
+    state.plan = buildPlan();
+    await savePlan();
+    renderPlan();
+    toast('Меню собрано заново');
+  }
+
+  async function swapPlanDay(index) {
+    if (!state.plan || !state.plan.days[index]) return;
+    const day = state.plan.days[index];
+    const used = state.plan.days.map((item) => item.dishId).filter((id) => id && id !== day.dishId);
+    let candidates = state.dishes.filter((dish) => used.indexOf(dish.id) < 0 && dish.id !== day.dishId);
+    if (!candidates.length) candidates = state.dishes.filter((dish) => dish.id !== day.dishId);
+    if (!candidates.length) candidates = state.dishes.slice();
+    const dish = weightedPick(candidates, day.dishId);
+    if (!dish) return;
+    day.dishId = dish.id;
+    day.cooked = false;
+    await savePlan();
+    renderPlan();
+    scheduleAutoBackup();
+  }
+
+  async function cookPlanDay(index) {
+    if (!state.plan || !state.plan.days[index]) return;
+    const day = state.plan.days[index];
+    if (!day.dishId) return;
+    await markCooked(day.dishId);
+    day.cooked = true;
+    await savePlan();
+    renderPlan();
+  }
+
+  /* ---------- Список покупок ---------- */
+  function planDishList() {
+    if (!state.plan || !state.plan.days) return [];
+    const ids = [];
+    state.plan.days.forEach((day) => {
+      if (day.dishId && ids.indexOf(day.dishId) < 0) ids.push(day.dishId);
+    });
+    return ids.map((id) => state.dishes.find((dish) => dish.id === id)).filter(Boolean);
+  }
+
+  function shoppingItems() {
+    const seen = new Set();
+    const items = [];
+    planDishList().forEach((dish) => {
+      (dish.ingredients || []).forEach((item) => {
+        const key = item.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          items.push(item);
+        }
+      });
+    });
+    return items.sort((a, b) => a.localeCompare(b, 'ru'));
+  }
+
+  function shoppingPlainText() {
+    const items = shoppingItems();
+    return 'Список покупок на неделю\n\n' + items.map((item) => '— ' + item).join('\n');
+  }
+
+  function openShopping() {
+    const items = shoppingItems();
+    const dishes = planDishList();
+    const body = $('#shoppingBody');
+    if (!body) return;
+    if (!dishes.length) {
+      toast('Сначала соберите меню на неделю');
+      return;
+    }
+    if (!items.length) {
+      body.innerHTML = '<p class="shopping-note">У блюд из меню пока нет ингредиентов. Добавьте их в карточках блюд — список соберётся сам.</p>' +
+        '<p class="shopping-note">В меню: ' + esc(dishes.map((dish) => dish.name).join(', ')) + '</p>';
+    } else {
+      body.innerHTML = '<p class="shopping-note">' + dishes.length + ' ' +
+        plural(dishes.length, ['блюдо', 'блюда', 'блюд']) + ' · ' + items.length + ' ' +
+        plural(items.length, ['продукт', 'продукта', 'продуктов']) + '</p>' +
+        '<ul class="shopping-list">' + items.map((item, index) =>
+          '<li><input type="checkbox" id="shop-' + index + '"><label for="shop-' + index + '">' + esc(item) + '</label></li>'
+        ).join('') + '</ul>';
+    }
+    openModal($('#shoppingModal'));
+  }
+
+  async function copyShopping() {
+    const text = shoppingPlainText();
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+      }
+      toast('Список скопирован');
+    } catch (e) {
+      toast('Не удалось скопировать');
+    }
+  }
+
+  async function shareShopping() {
+    const text = shoppingPlainText();
+    try {
+      await navigator.share({ title: 'Список покупок', text });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      await copyShopping();
+    }
+  }
+
+  function downloadShopping() {
+    const blob = new Blob(['\ufeff' + shoppingPlainText()], { type: 'text/plain;charset=utf-8' });
+    downloadBlob(blob, 'vkusno-pokupki-' + localDateKey() + '.txt');
+    toast('Список сохранён в Загрузки');
+  }
+
+  /* ---------- Настройки при запуске ---------- */
+  async function requestPersistence() {
+    if (!navigator.storage || !navigator.storage.persist) return;
+    try {
+      if (!(await navigator.storage.persisted())) await navigator.storage.persist();
+    } catch (e) { /* ignore */ }
+  }
+
+  async function loadExtras() {
+    try { state.lastBackupAt = await DB.getMeta('lastBackupAt') || null; } catch (e) { state.lastBackupAt = null; }
+    try {
+      const theme = (await DB.getMeta('theme')) || (function () {
+        try { return localStorage.getItem('vkusno.theme'); } catch (e) { return null; }
+      })();
+      if (theme) applyTheme(theme, false);
+    } catch (e) { /* ignore */ }
+    await loadHistory();
+    try {
+      const today = await DB.getMeta('todayPick');
+      if (today && today.date === localDateKey()) state.today = today;
+    } catch (e) { /* ignore */ }
+    try {
+      const plan = await DB.getMeta('weekPlan');
+      if (plan && Array.isArray(plan.days)) state.plan = plan;
+    } catch (e) { /* ignore */ }
+    if (DB.mode === 'idb') {
+      try {
+        const handle = await DB.getMeta('backupDir');
+        if (handle && handle.name) state.autoBackup = { handle };
+        state.lastAutoBackupAt = await DB.getMeta('lastAutoBackupAt') || null;
+      } catch (e) { /* ignore */ }
+    }
+    renderThemeChoices();
+    renderAutoBackupSettings();
+  }
+
+  function maybeRemindBackup() {
+    if (!state.dishes.length) return;
+    const days = daysSince(state.lastBackupAt);
+    if (days !== null && days <= 30) return;
+    try {
+      const lastReminder = localStorage.getItem('vkusno.backupReminder');
+      if (lastReminder && daysSince(lastReminder) !== null && daysSince(lastReminder) < 7) return;
+      localStorage.setItem('vkusno.backupReminder', localDateKey());
+    } catch (e) { /* ignore */ }
+    setTimeout(() => toast('Давно не делали бэкап. Настройки → «Скачать файл».', { duration: 5000 }), 2200);
+  }
+
+  async function migratePhotosToBlobs() {
+    if (DB.mode !== 'idb') return;
+    const candidates = state.dishes
+      .filter((dish) => typeof dish.photo === 'string' && dish.photo.indexOf('data:image/') === 0)
+      .map((dish) => ({ id: dish.id, photo: dish.photo }));
+    for (const item of candidates) {
+      const dish = state.dishes.find((d) => d.id === item.id);
+      if (!dish || dish.photo !== item.photo) continue;
+      try {
+        const blob = dataURLToBlob(item.photo);
+        /* Блюдо могли изменить или удалить, пока читали фото. */
+        const current = state.dishes.find((d) => d.id === item.id);
+        if (!current || current.photo !== item.photo) continue;
+        current.photo = blob;
+        await DB.put(current);
+      } catch (e) { /* оставляем data URL */ }
+    }
+  }
+
   /* ---------- События ---------- */
   function bindEvents() {
-    $('#spinBtn').addEventListener('click', spinWheel);
+    $('#spinBtn').addEventListener('click', () => spinWheel());
     $('#addBtn').addEventListener('click', () => openForm());
     $('#addBtnMobile').addEventListener('click', () => openForm());
     $('#settingsBtn').addEventListener('click', openSettings);
     $('#settingsBtnMobile').addEventListener('click', openSettings);
+    $('#planBtn').addEventListener('click', openPlan);
+    $('#historyBtn').addEventListener('click', openHistory);
+
+    $('#todayCook').addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (id) markCooked(id);
+    });
+    $('#todayOpen').addEventListener('click', (e) => {
+      const id = e.currentTarget.dataset.id;
+      if (id) openDish(id);
+    });
+
+    $('#themeChoices').addEventListener('click', (e) => {
+      const choice = e.target.closest('[data-theme-choice]');
+      if (choice) applyTheme(choice.dataset.themeChoice, true);
+    });
+
+    $('#autoBackupPick').addEventListener('click', chooseAutoBackupFolder);
+    $('#autoBackupNow').addEventListener('click', () => writeAutoBackup(true));
+    $('#autoBackupOff').addEventListener('click', disableAutoBackup);
+    $('#installBtn').addEventListener('click', installApp);
+    $('#updateBtn').addEventListener('click', () => location.reload());
+
+    $('#planRebuild').addEventListener('click', rebuildPlan);
+    $('#planShopping').addEventListener('click', openShopping);
+    $('#planBody').addEventListener('click', (e) => {
+      const swap = e.target.closest('[data-plan-swap]');
+      if (swap) { swapPlanDay(Number(swap.dataset.planSwap)); return; }
+      const cook = e.target.closest('[data-plan-cook]');
+      if (cook) { cookPlanDay(Number(cook.dataset.planCook)); return; }
+      const open = e.target.closest('[data-plan-open]');
+      if (open) {
+        const day = state.plan && state.plan.days[Number(open.dataset.planOpen)];
+        if (day && day.dishId) openDish(day.dishId);
+      }
+    });
+
+    $('#shoppingCopy').addEventListener('click', copyShopping);
+    $('#shoppingDownload').addEventListener('click', downloadShopping);
+    if (navigator.share) {
+      $('#shoppingShare').hidden = false;
+      $('#shoppingShare').addEventListener('click', shareShopping);
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      state.installPrompt = e;
+      renderInstallState();
+    });
+    window.addEventListener('appinstalled', () => {
+      state.installPrompt = null;
+      renderInstallState();
+      toast('Приложение установлено');
+    });
+
+    window.addEventListener('online', () => {
+      renderOnlineState();
+      toast('Снова онлайн');
+    });
+    window.addEventListener('offline', () => {
+      renderOnlineState();
+      toast('Нет сети — данные сохранятся на устройстве');
+    });
 
     $('#mealChips').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-meal]');
@@ -1074,6 +2106,16 @@
       if (e.target.closest('[data-dish-fav]')) {
         state.dishFav = !state.dishFav;
         renderDishesView();
+        return;
+      }
+      if (e.target.closest('[data-dish-photo]')) {
+        state.dishPhoto = !state.dishPhoto;
+        renderDishesView();
+        return;
+      }
+      if (e.target.closest('[data-dish-long]')) {
+        state.dishLongAgo = !state.dishLongAgo;
+        renderDishesView();
       }
     });
 
@@ -1098,6 +2140,8 @@
         state.search = '';
         state.dishMeal = 'all';
         state.dishFav = false;
+        state.dishPhoto = false;
+        state.dishLongAgo = false;
         $('#searchInput').value = '';
         renderDishesView();
         return;
@@ -1121,8 +2165,9 @@
     });
 
     $('#againBtn').addEventListener('click', () => {
+      const current = state.resultId;
       closeModal($('#resultModal'));
-      setTimeout(spinWheel, 300);
+      setTimeout(() => spinWheel(current), 300);
     });
 
     $('#dishModal').addEventListener('click', (e) => {
@@ -1189,6 +2234,7 @@
 
     $('#photoRemove').addEventListener('click', (e) => {
       e.stopPropagation();
+      resetFormPhotoPreview();
       formPhoto = null;
       renderFormPhoto();
     });
@@ -1198,6 +2244,7 @@
       e.target.value = '';
       if (!file) return;
       try {
+        resetFormPhotoPreview();
         formPhoto = await compressPhoto(file);
         renderFormPhoto();
       } catch (err) {
@@ -1222,6 +2269,7 @@
       const n = await addSamples();
       renderAll();
       toast(n ? 'Добавлено примеров: ' + n : 'Примеры уже есть в списке');
+      if (n) scheduleAutoBackup();
     });
     $('#clearBtn').addEventListener('click', clearAll);
 
@@ -1254,27 +2302,59 @@
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
       const open = $$('.modal.open');
-      if (!open.length) return;
-      const top = open[open.length - 1];
-      if (top.id === 'confirmModal') resolveConfirm(false);
-      else closeModal(top);
-    });
-  }
+      const top = open.length ? open[open.length - 1] : null;
 
-  function registerSW() {
-    if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-    const start = () => {
-      navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-режим недоступен */ });
-    };
-    if (document.readyState === 'complete') start();
-    else window.addEventListener('load', start, { once: true });
+      if (e.key === 'Escape' && top) {
+        if (top.id === 'confirmModal') resolveConfirm(false);
+        else closeModal(top);
+        return;
+      }
+
+      if (e.key === 'Tab' && top) {
+        const items = $$('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])', top)
+          .filter((el) => el.offsetParent !== null);
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !top.contains(document.activeElement))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !top.contains(document.activeElement))) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+
+      if (top) return;
+      const target = e.target;
+      const typing = target && (target.closest && target.closest('input, textarea, select, [contenteditable="true"]'));
+      if (e.key === '/' && !typing) {
+        e.preventDefault();
+        switchView('dishes');
+        setTimeout(() => { const field = $('#searchInput'); if (field) field.focus(); }, 60);
+        return;
+      }
+      if (typing) return;
+      const interactive = target && target.closest && target.closest('button, a');
+      if (interactive) return;
+      if (e.key === ' ' && state.view === 'wheel') {
+        e.preventDefault();
+        spinWheel();
+      } else if ((e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        openForm();
+      }
+    });
   }
 
   async function init() {
     Wheel.init($('#wheel'), $('#wheelStage'));
     bindEvents();
+    renderOnlineState();
+    watchSystemTheme();
+    renderInstallState();
     renderAll();
 
     try {
@@ -1295,13 +2375,37 @@
       } catch (e) { /* не критично */ }
     }
 
+    await loadExtras();
     renderAll();
 
     if (added) {
       setTimeout(() => toast('Добавили ' + added + ' примеров — замените их своими блюдами'), 900);
+    } else {
+      maybeRemindBackup();
     }
 
-    registerSW();
+    /* Старые фото хранились как data URL — переводим в Blob в фоне. */
+    if (DB.mode === 'idb') {
+      migratePhotosToBlobs().then(() => renderAll()).catch(() => {});
+    }
+
+    requestPersistence();
+    refreshStorageInfo();
+    setupServiceWorker();
+
+    /* Если автобэкап настроен давно, обновляем копию при запуске. */
+    if (state.autoBackup && state.lastAutoBackupAt &&
+      Date.now() - state.lastAutoBackupAt > AUTO_BACKUP_INTERVAL) {
+      setTimeout(() => writeAutoBackup(false), 3500);
+    }
+
+    const params = new URLSearchParams(location.search);
+    const action = params.get('action');
+    if (action) {
+      try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) { /* ignore */ }
+      if (action === 'add') setTimeout(() => openForm(), 400);
+      else if (action === 'spin') setTimeout(() => spinWheel(), 700);
+    }
   }
 
   if (document.readyState === 'loading') {
