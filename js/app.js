@@ -794,6 +794,82 @@
     }
   }
 
+  function csvCell(value) {
+    const s = value == null ? '' : String(value);
+    return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function csvDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('ru-RU');
+  }
+
+  function buildCsv() {
+    const rows = [[
+      'Название', 'Описание', 'Оценка', 'Приёмы пищи', 'Типы',
+      'Время, мин', 'Избранное', 'Последнее приготовление', 'Приготовлений', 'Добавлено'
+    ]];
+    state.dishes.slice()
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+      .forEach((d) => {
+        rows.push([
+          d.name,
+          d.desc || '',
+          d.rating || '',
+          d.meals.map((id) => { const m = mealById(id); return m ? m.label : ''; }).filter(Boolean).join(', '),
+          d.types.map((id) => { const t = typeById(id); return t ? t.label : ''; }).filter(Boolean).join(', '),
+          d.time || '',
+          d.favorite ? 'да' : 'нет',
+          csvDate(d.lastCooked),
+          d.timesCooked || 0,
+          csvDate(d.createdAt)
+        ]);
+      });
+    return rows.map((row) => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
+  }
+
+  function csvName() {
+    return 'vkusno-spisok-' + new Date().toISOString().slice(0, 10) + '.csv';
+  }
+
+  function csvBlob() {
+    return new Blob(['\ufeff' + buildCsv()], { type: 'text/csv;charset=utf-8' });
+  }
+
+  function exportCsv() {
+    if (!state.dishes.length) {
+      toast('Список пока пуст');
+      return;
+    }
+    try {
+      downloadBlob(csvBlob(), csvName());
+      toast('Список сохранён в Загрузки');
+    } catch (e) {
+      toast('Не удалось создать файл');
+    }
+  }
+
+  async function shareCsv() {
+    if (!state.dishes.length) {
+      toast('Список пока пуст');
+      return;
+    }
+    const blob = csvBlob();
+    const file = new File([blob], csvName(), { type: 'text/csv' });
+    try {
+      await navigator.share({
+        files: [file],
+        title: 'Вкусно? — список блюд',
+        text: 'Список блюд без фото'
+      });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      downloadBlob(blob, csvName());
+      toast('Меню недоступно — файл скачан');
+    }
+  }
+
   function setupShareButtons() {
     const probe = new File(['{}'], 'backup.json', { type: 'application/json' });
     let canShareFiles = false;
@@ -809,6 +885,16 @@
     if (saveBtn && typeof window.showSaveFilePicker === 'function') {
       saveBtn.hidden = false;
       saveBtn.addEventListener('click', saveBackupToFolder);
+    }
+    const csvProbe = new File(['a;b'], 'spisok.csv', { type: 'text/csv' });
+    let canShareCsv = false;
+    try {
+      canShareCsv = !!(navigator.canShare && navigator.canShare({ files: [csvProbe] }));
+    } catch (e) { /* останется только скачивание */ }
+    const csvShareBtn = $('#csvShareBtn');
+    if (csvShareBtn && canShareCsv && navigator.share) {
+      csvShareBtn.hidden = false;
+      csvShareBtn.addEventListener('click', shareCsv);
     }
   }
 
@@ -1124,6 +1210,7 @@
     });
 
     $('#exportBtn').addEventListener('click', exportBackup);
+    $('#csvBtn').addEventListener('click', exportCsv);
     setupShareButtons();
     $('#importBtn').addEventListener('click', () => $('#importInput').click());
     $('#importInput').addEventListener('change', async (e) => {
