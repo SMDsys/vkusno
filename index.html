@@ -251,10 +251,17 @@
         <h3>Данные</h3>
         <p class="muted" id="settingsStats">…</p>
         <div class="settings-actions">
-          <button class="btn btn-ghost" id="exportBtn" type="button">Скачать бэкап</button>
+          <button class="btn btn-primary" id="shareBtn" type="button" hidden>Поделиться бэкапом</button>
+          <button class="btn btn-ghost" id="saveAsBtn" type="button" hidden>Сохранить в папку…</button>
+          <button class="btn btn-ghost" id="exportBtn" type="button">Скачать файл</button>
           <button class="btn btn-ghost" id="importBtn" type="button">Загрузить бэкап</button>
           <input type="file" id="importInput" accept="application/json,.json" hidden />
         </div>
+        <p class="settings-hint">
+          «Поделиться» отправит файл в Почту, Telegram, AirDrop или облачную папку
+          (iCloud Drive, Google Drive). Файл из письма сохраните в «Файлы», затем
+          загрузите его здесь.
+        </p>
       </section>
       <section>
         <h3>Примеры</h3>

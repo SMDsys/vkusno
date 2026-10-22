@@ -728,26 +728,87 @@
     openModal($('#settingsModal'));
   }
 
-  function exportBackup() {
+  function backupName() {
+    return 'vkusno-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  }
+
+  function backupBlob() {
     const payload = {
       app: 'vkusno',
       version: 1,
       exportedAt: new Date().toISOString(),
       dishes: state.dishes
     };
+    return new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  }
+
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function exportBackup() {
     try {
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'vkusno-backup-' + new Date().toISOString().slice(0, 10) + '.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      downloadBlob(backupBlob(), backupName());
       toast('Бэкап сохранён в Загрузки');
     } catch (e) {
       toast('Не удалось создать файл');
+    }
+  }
+
+  async function shareBackup() {
+    const blob = backupBlob();
+    const file = new File([blob], backupName(), { type: 'application/json' });
+    try {
+      await navigator.share({
+        files: [file],
+        title: 'Вкусно? — бэкап',
+        text: 'Список блюд и фото из приложения «Вкусно?»'
+      });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      downloadBlob(blob, backupName());
+      toast('Меню недоступно — файл скачан');
+    }
+  }
+
+  async function saveBackupToFolder() {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: backupName(),
+        types: [{ description: 'Резервная копия', accept: { 'application/json': ['.json'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(backupBlob());
+      await writable.close();
+      toast('Бэкап сохранён в выбранную папку');
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      toast('Не удалось сохранить файл');
+    }
+  }
+
+  function setupShareButtons() {
+    const probe = new File(['{}'], 'backup.json', { type: 'application/json' });
+    let canShareFiles = false;
+    try {
+      canShareFiles = !!(navigator.canShare && navigator.canShare({ files: [probe] }));
+    } catch (e) { /* браузер не умеет делиться файлами */ }
+    const shareBtn = $('#shareBtn');
+    if (shareBtn && canShareFiles && navigator.share) {
+      shareBtn.hidden = false;
+      shareBtn.addEventListener('click', shareBackup);
+    }
+    const saveBtn = $('#saveAsBtn');
+    if (saveBtn && typeof window.showSaveFilePicker === 'function') {
+      saveBtn.hidden = false;
+      saveBtn.addEventListener('click', saveBackupToFolder);
     }
   }
 
@@ -1063,6 +1124,7 @@
     });
 
     $('#exportBtn').addEventListener('click', exportBackup);
+    setupShareButtons();
     $('#importBtn').addEventListener('click', () => $('#importInput').click());
     $('#importInput').addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0];

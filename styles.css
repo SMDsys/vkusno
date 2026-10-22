@@ -798,6 +798,12 @@ body.modal-open { overflow: hidden; }
 .settings-body h3 { font-size: 13.5px; font-weight: 650; margin-bottom: 5px; }
 .settings-body .muted { margin-bottom: 12px; }
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-hint {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-2);
+}
 .settings-foot { padding-top: 18px; font-size: 11px; color: var(--muted-2); text-align: center; }
 
 /* Confirm */
