@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Вкусно? — что приготовить сегодня</title>
+  <meta name="description" content="Личный список блюд, рейтинг и колесо выбора: что приготовить на завтрак, обед или ужин." />
+  <meta name="theme-color" content="#0f0d0b" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Вкусно?" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="#" data-view="wheel" aria-label="Вкусно? — на главную">
+      <img class="brand-logo" src="icons/icon.svg" alt="" width="44" height="44" />
+      <span class="brand-text">
+        <h1>Вкусно?</h1>
+        <span>что приготовить сегодня</span>
+      </span>
+    </a>
+
+    <nav class="nav-tabs" aria-label="Разделы">
+      <button class="nav-tab is-active" data-view="wheel" type="button">Колесо</button>
+      <button class="nav-tab" data-view="dishes" type="button">Блюда</button>
+    </nav>
+
+    <button class="btn btn-primary add-btn" id="addBtn" type="button">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Блюдо</span>
+    </button>
+    <button class="icon-btn" id="settingsBtn" type="button" aria-label="Настройки" title="Настройки">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.66 8a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 3.64h.1a1.7 1.7 0 0 0 1-1.56V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.1a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="view" id="view-wheel">
+      <div class="wheel-layout">
+        <div class="panel wheel-panel">
+          <div class="wheel-head">
+            <div>
+              <h2>Что съедим?</h2>
+              <p class="muted" id="wheelCount">Крутите колесо — оно выберет за вас.</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="resetFilters" type="button" hidden>Сбросить</button>
+          </div>
+
+          <div class="wheel-stage" id="wheelStage">
+            <canvas id="wheel" aria-label="Колесо выбора блюд"></canvas>
+            <div class="wheel-pointer" aria-hidden="true"></div>
+            <button class="wheel-hub" id="spinBtn" type="button">
+              <span class="hub-label">Крутить</span>
+            </button>
+            <div class="wheel-empty" id="wheelEmpty" hidden>
+              <div class="empty-art small">🍽</div>
+              <p>Для колеса нужно хотя бы два блюда</p>
+              <button class="btn btn-primary" type="button" data-action="add">Добавить блюдо</button>
+            </div>
+          </div>
+
+          <p class="wheel-hint">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="3.4"/></svg>
+            Умный выбор: любимые блюда выпадают чаще, а приготовленные недавно — реже.
+          </p>
+        </div>
+
+        <aside class="side">
+          <div class="panel">
+            <h3 class="side-title">Настройки колеса</h3>
+            <div class="filter-group">
+              <span class="filter-label">Приём пищи</span>
+              <div class="chips" id="mealChips"></div>
+            </div>
+            <label class="switch">
+              <span><strong>Только быстрое</strong><small>до 30 минут</small></span>
+              <input type="checkbox" id="fastToggle" />
+            </label>
+            <label class="switch">
+              <span><strong>Только избранное</strong><small>самые любимые</small></span>
+              <input type="checkbox" id="favToggle" />
+            </label>
+          </div>
+
+          <div class="panel stats-panel">
+            <div class="stat"><strong id="statDishes">0</strong><span>блюд в списке</span></div>
+            <div class="stat"><strong id="statRating">—</strong><span>средний рейтинг</span></div>
+            <div class="stat"><strong id="statCooks">0</strong><span>раз готовили</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="view" id="view-dishes" hidden>
+      <div class="dishes-head">
+        <div>
+          <h2>Мои блюда</h2>
+          <p class="muted" id="dishesCount"></p>
+        </div>
+        <div class="dishes-tools">
+          <label class="search">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+            <input id="searchInput" type="search" placeholder="Найти блюдо…" autocomplete="off" />
+          </label>
+          <select class="input select" id="sortSelect" aria-label="Сортировка">
+            <option value="smart">По рейтингу</option>
+            <option value="new">Сначала новые</option>
+            <option value="recent">Недавно готовили</option>
+            <option value="name">По названию</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="chips filters-row" id="dishFilters"></div>
+
+      <div class="dish-grid" id="dishGrid"></div>
+
+      <div class="empty" id="dishesEmpty" hidden>
+        <div class="empty-art">🍽</div>
+        <h3>Пока пусто</h3>
+        <p class="muted">Добавьте блюда, которые готовы есть хоть каждый день.</p>
+        <button class="btn btn-primary" type="button" data-action="add">Добавить первое блюдо</button>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Навигация">
+    <button type="button" data-view="wheel" class="is-active">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 12 12 4.2M12 12l7 3.6M12 12l-6 5.4" stroke-linecap="round"/></svg>
+      <span>Колесо</span>
+    </button>
+    <button type="button" data-view="dishes">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>
+      <span>Блюда</span>
+    </button>
+    <button type="button" id="addBtnMobile" class="fab" aria-label="Добавить блюдо">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Добавить</span>
+    </button>
+    <button type="button" id="settingsBtnMobile">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.66 8a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 3.64h.1a1.7 1.7 0 0 0 1-1.56V2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.1a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      <span>Ещё</span>
+    </button>
+  </nav>
+</div>
+
+<div class="modal" id="resultModal" aria-hidden="true">
+  <div class="modal-card result-card" role="dialog" aria-modal="true" aria-labelledby="resultName">
+    <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    <div class="result-media" id="resultMedia"></div>
+    <div class="result-body">
+      <span class="eyebrow">Сегодня готовим</span>
+      <h2 id="resultName">—</h2>
+      <div class="result-rating" id="resultStars"></div>
+      <div class="tags" id="resultTags"></div>
+      <p class="result-desc" id="resultDesc"></p>
+      <div class="result-actions">
+        <button class="btn btn-primary" id="cookBtn" type="button">Готовлю!</button>
+        <button class="btn btn-ghost" id="againBtn" type="button">Ещё раз</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="dishModal" aria-hidden="true">
+  <div class="modal-card detail-card" role="dialog" aria-modal="true" aria-labelledby="detailName">
+    <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    <div id="dishDetail"></div>
+  </div>
+</div>
+
+<div class="modal" id="formModal" aria-hidden="true">
+  <div class="modal-card form-card" role="dialog" aria-modal="true" aria-labelledby="formTitle">
+    <div class="modal-head">
+      <h2 id="formTitle">Новое блюдо</h2>
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <form id="dishForm" novalidate>
+      <div class="photo-picker" id="photoPicker">
+        <div class="photo-placeholder" id="photoPlaceholder">
+          <span class="ph-icon">📷</span>
+          <strong>Добавить фото</strong>
+          <small>JPG, PNG или HEIC</small>
+        </div>
+        <img id="photoPreview" alt="" hidden />
+        <div class="photo-actions" id="photoActions" hidden>
+          <button type="button" class="btn btn-ghost btn-sm" id="photoChange">Заменить</button>
+          <button type="button" class="btn btn-danger btn-sm" id="photoRemove">Удалить</button>
+        </div>
+        <input type="file" id="photoInput" accept="image/*" hidden />
+      </div>
+
+      <label class="field">
+        <span>Название</span>
+        <input class="input" id="fName" maxlength="60" placeholder="Например, паста карбонара" required />
+      </label>
+      <label class="field">
+        <span>Краткое описание</span>
+        <textarea class="input" id="fDesc" maxlength="240" rows="2" placeholder="С беконом, сливками и пармезаном"></textarea>
+      </label>
+
+      <div class="field">
+        <span>Оценка</span>
+        <div class="rating-input" id="fRating" role="group" aria-label="Оценка блюда"></div>
+      </div>
+      <div class="field">
+        <span>Когда готовить</span>
+        <div class="chips" id="fMeals"></div>
+      </div>
+      <div class="field">
+        <span>Тип блюда</span>
+        <div class="chips" id="fTypes"></div>
+      </div>
+      <div class="field">
+        <span>Время, минут</span>
+        <div class="time-row">
+          <input class="input" type="number" id="fTime" min="0" max="600" inputmode="numeric" />
+          <div class="chips" id="fTimeQuick"></div>
+        </div>
+      </div>
+
+      <label class="switch">
+        <span><strong>В избранное</strong><small>любимое блюдо, чаще выпадает</small></span>
+        <input type="checkbox" id="fFav" />
+      </label>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-danger" id="fDelete" hidden>Удалить</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-ghost" data-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="settingsModal" aria-hidden="true">
+  <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-head">
+      <h2 id="settingsTitle">Настройки</h2>
+      <button class="modal-close" type="button" data-close aria-label="Закрыть">✕</button>
+    </div>
+    <div class="settings-body">
+      <section>
+        <h3>Данные</h3>
+        <p class="muted" id="settingsStats">…</p>
+        <div class="settings-actions">
+          <button class="btn btn-ghost" id="exportBtn" type="button">Скачать бэкап</button>
+          <button class="btn btn-ghost" id="importBtn" type="button">Загрузить бэкап</button>
+          <input type="file" id="importInput" accept="application/json,.json" hidden />
+        </div>
+      </section>
+      <section>
+        <h3>Примеры</h3>
+        <p class="muted">Посмотреть, как всё работает, или взять за основу.</p>
+        <div class="settings-actions">
+          <button class="btn btn-ghost" id="samplesBtn" type="button">Добавить примеры блюд</button>
+        </div>
+      </section>
+      <section>
+        <h3>Опасная зона</h3>
+        <p class="muted">Удаляет все блюда и фото с этого устройства.</p>
+        <button class="btn btn-danger" id="clearBtn" type="button">Очистить всё</button>
+      </section>
+      <footer class="settings-foot">
+        Вкусно? · данные хранятся только на этом устройстве
+      </footer>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="confirmModal" aria-hidden="true">
+  <div class="modal-card confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h2 id="confirmTitle">Удалить?</h2>
+    <p class="muted" id="confirmText"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" id="confirmNo" type="button">Отмена</button>
+      <button class="btn btn-danger" id="confirmYes" type="button">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+
+<script src="js/db.js"></script>
+<script src="js/seed.js"></script>
+<script src="js/wheel.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

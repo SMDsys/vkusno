@@ -1,0 +1,27 @@
+/* Примеры блюд для первого запуска. */
+window.SEED_DISHES = [
+  { id: 'seed-borsch', name: 'Борщ', desc: 'Наваристый, со сметаной и пампушками', emoji: '🍲',
+    rating: 5, meals: ['lunch', 'dinner'], types: ['soup'], time: 90, favorite: true, lastCookedDays: 12, timesCooked: 9 },
+  { id: 'seed-carbonara', name: 'Паста карбонара', desc: 'С беконом, сливками и пармезаном', emoji: '🍝',
+    rating: 5, meals: ['dinner'], types: ['pasta'], time: 25, favorite: true, lastCookedDays: 2, timesCooked: 14 },
+  { id: 'seed-chicken', name: 'Куриная грудка с овощами', desc: 'Запечённая в духовке, с брокколи и перцем', emoji: '🍗',
+    rating: 4, meals: ['lunch', 'dinner'], types: ['meat'], time: 35, favorite: false, lastCookedDays: 5, timesCooked: 11 },
+  { id: 'seed-pelmeni', name: 'Пельмени', desc: 'Домашние, с маслом и сметаной', emoji: '🥟',
+    rating: 4, meals: ['dinner'], types: ['meat'], time: 20, favorite: false, lastCookedDays: 1, timesCooked: 6 },
+  { id: 'seed-omelette', name: 'Омлет с сыром', desc: 'Пышный, на молоке, с зеленью', emoji: '🍳',
+    rating: 4, meals: ['breakfast'], types: ['other'], time: 10, favorite: false, lastCookedDays: 0, timesCooked: 20 },
+  { id: 'seed-grechka', name: 'Гречка с котлетой', desc: 'По-домашнему, с луковой подливой', emoji: '🍚',
+    rating: 3, meals: ['lunch', 'dinner'], types: ['side', 'meat'], time: 45, favorite: false, lastCookedDays: 8, timesCooked: 7 },
+  { id: 'seed-caesar', name: 'Салат «Цезарь»', desc: 'Курица, романо, сухарики и пармезан', emoji: '🥗',
+    rating: 5, meals: ['lunch'], types: ['salad'], time: 20, favorite: true, lastCookedDays: 3, timesCooked: 8 },
+  { id: 'seed-salmon', name: 'Лосось на пару с рисом', desc: 'Лёгкий ужин с лимоном и укропом', emoji: '🐟',
+    rating: 4, meals: ['dinner'], types: ['fish'], time: 35, favorite: false, lastCookedDays: 15, timesCooked: 5 },
+  { id: 'seed-shawarma', name: 'Домашняя шаурма', desc: 'Курица, овощи, чесночный соус в лаваше', emoji: '🌯',
+    rating: 5, meals: ['dinner'], types: ['meat'], time: 35, favorite: true, lastCookedDays: 20, timesCooked: 12 },
+  { id: 'seed-syrniki', name: 'Сырники', desc: 'Со сгущёнкой и свежими ягодами', emoji: '🥞',
+    rating: 4, meals: ['breakfast'], types: ['dessert'], time: 25, favorite: false, lastCookedDays: 6, timesCooked: 4 },
+  { id: 'seed-pizza', name: 'Пицца «Маргарита»', desc: 'Тонкое тесто, моцарелла и базилик', emoji: '🍕',
+    rating: 4, meals: ['dinner'], types: ['bakery'], time: 60, favorite: false, lastCookedDays: 30, timesCooked: 3 },
+  { id: 'seed-tomyam', name: 'Том-ям с креветками', desc: 'Острый, с кокосовым молоком и лемонграссом', emoji: '🍤',
+    rating: 5, meals: ['dinner'], types: ['soup', 'fish'], time: 45, favorite: false, lastCookedDays: 40, timesCooked: 2 }
+];
