@@ -6,7 +6,7 @@
 
 ## Онлайн-версия
 
-**https://skamsystem.github.io/vkusno/**
+**https://smdsys.github.io/vkusno/**
 
 Откройте ссылку на телефоне и установите приложение на домашний экран:
 
@@ -139,7 +139,7 @@ icons/                иконки приложения
 ## Обновление онлайн-версии
 
 Сайт — статическая копия этой папки в репозитории
-[SkamSyStem/vkusno](https://github.com/SkamSyStem/vkusno) (код публичный,
+[SMDsys/vkusno](https://github.com/SMDsys/vkusno) (код публичный,
 блюда и фото остаются только на устройствах). После правок:
 
 ```bash
